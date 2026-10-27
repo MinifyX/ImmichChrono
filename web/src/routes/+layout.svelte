@@ -19,6 +19,8 @@
   } from '@immich/ui';
   import {
     mdiCamera,
+    mdiChartBox,
+    mdiChartBoxOutline,
     mdiCameraOutline,
     mdiCheckDecagram,
     mdiCheckDecagramOutline,
@@ -68,6 +70,7 @@
     { href: '/unresolved', title: 'Ungeklärt', icon: mdiHelpCircleOutline, activeIcon: mdiHelpCircle },
     { href: '/camera', title: 'Kamera-Uhr', icon: mdiCameraOutline, activeIcon: mdiCamera },
     { href: '/history', title: 'Verlauf', icon: mdiHistory, activeIcon: mdiHistory },
+    { href: '/insights', title: 'Auswertung', icon: mdiChartBoxOutline, activeIcon: mdiChartBox },
     { href: '/settings', title: 'Einstellungen', icon: mdiCogOutline, activeIcon: mdiCog },
   ];
   const isActive = (href: string) =>

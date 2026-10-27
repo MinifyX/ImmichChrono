@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import __version__, camera_shift, claude, ollama, scanner, suggestions
+from . import __version__, camera_shift, claude, decisions, ollama, scanner, suggestions
 from .auth import COOKIE, User, create_session, current_user, get_db
 from .config import settings
 from .dates import asset_zone, current_local
@@ -29,6 +30,17 @@ AssetId = Annotated[str, Path(pattern=r"^[0-9A-Za-z-]{1,64}$")]
 def _has_session(request: Request, db: Database) -> bool:
     sid = request.cookies.get(COOKIE)
     return bool(sid and db.one("SELECT 1 FROM sessions WHERE id=? AND expires_at > ?", (sid, now_iso())))
+
+# A reason code from decisions.REASONS (validated in the endpoints) plus optional free text.
+ReasonCode = Annotated[str | None, Field(max_length=32, pattern=r"^[a-z_]+$")]
+NoteText = Annotated[str | None, Field(max_length=decisions.NOTE_MAX)]
+
+
+def _reason(code: str | None) -> str | None:
+    if code is not None and code not in decisions.REASONS:
+        raise HTTPException(422, "Unbekannter Grund")
+    return code
+
 
 DEFAULT_SETTINGS = {
     "auto_apply": True,
@@ -113,6 +125,7 @@ async def server(request: Request, db: Database = Depends(get_db)) -> dict:
         # Ollama errors can contain internal addresses: details only for signed-in users.
         "ollama": await ollama.available() if _has_session(request, db) else {"configured": bool(settings.ollama_url)},
         "issueLabels": ISSUE_LABELS,
+        "decisionReasons": decisions.reason_labels(),
     }
 
 
@@ -255,11 +268,16 @@ def list_suggestions(
     return {"items": items, "total": total, "page": page, "size": size}
 
 
-class IdsBody(BaseModel):
+class ReasonBody(BaseModel):
+    reason: ReasonCode = None
+    note: NoteText = None
+
+
+class IdsBody(ReasonBody):
     ids: list[int] = Field(default_factory=list, max_length=20000)
 
 
-class FilterBody(BaseModel):
+class FilterBody(ReasonBody):
     source: str | None = None
     category: str | None = None
     min_conf: float | None = None
@@ -270,7 +288,7 @@ class FilterBody(BaseModel):
 @router.post("/suggestions/apply")
 async def apply_suggestions(body: IdsBody, user: User = Depends(current_user), db: Database = Depends(get_db)) -> dict:
     async with immich_for(user) as immich:
-        return await suggestions.apply(db, immich, user.id, body.ids)
+        return await suggestions.apply(db, immich, user.id, body.ids, reason=_reason(body.reason), note=body.note)
 
 
 @router.post("/suggestions/apply-filter")
@@ -279,24 +297,24 @@ async def apply_filter(body: FilterBody, user: User = Depends(current_user), db:
     ids = [r["id"] for r in db.all(
         f"SELECT s.id FROM suggestions s JOIN assets a ON a.user_id=s.user_id AND a.id=s.asset_id WHERE {where}",
         params)]
+    reason = _reason(body.reason)
     async with immich_for(user) as immich:
-        return await suggestions.apply(db, immich, user.id, ids)
+        return await suggestions.apply(db, immich, user.id, ids, reason=reason, note=body.note)
 
 
 @router.post("/suggestions/reject")
 def reject(body: IdsBody, user: User = Depends(current_user), db: Database = Depends(get_db)) -> dict:
-    if body.ids:
-        db.execute(
-            f"UPDATE suggestions SET status='rejected' WHERE user_id=? AND status='pending' "
-            f"AND id IN ({','.join('?' * len(body.ids))})", (user.id, *body.ids))
-    return {"rejected": len(body.ids)}
+    return {"rejected": suggestions.reject(db, user.id, body.ids, _reason(body.reason), body.note)}
 
 
 @router.post("/suggestions/{suggestion_id}/undo")
-async def undo(suggestion_id: int, user: User = Depends(current_user), db: Database = Depends(get_db)) -> dict:
+async def undo(suggestion_id: int, body: ReasonBody | None = None, user: User = Depends(current_user),
+               db: Database = Depends(get_db)) -> dict:
+    body = body or ReasonBody()
+    reason = _reason(body.reason)
     async with immich_for(user) as immich:
         try:
-            await suggestions.undo(db, immich, user.id, suggestion_id)
+            await suggestions.undo(db, immich, user.id, suggestion_id, reason, body.note)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         except ImmichError as e:
@@ -359,22 +377,35 @@ async def thumbnail(asset_id: AssetId, size: Literal["thumbnail", "preview"] = "
                     headers={"Cache-Control": "private, max-age=86400"})
 
 
-class ManualBody(BaseModel):
+class ManualBody(ReasonBody):
     date: datetime  # local wall-clock time
     apply: bool = True
-    note: str | None = None
 
 
 @router.post("/assets/{asset_id}/manual")
 async def manual(asset_id: AssetId, body: ManualBody, user: User = Depends(current_user),
                  db: Database = Depends(get_db)) -> dict:
     a = _asset(db, user, asset_id)
+    reason = _reason(body.reason)
     sid = suggestions.create_manual(db, user.id, a, body.date.replace(tzinfo=None),
                                     body.note or "Manuell gesetzt")
     if not body.apply:
         return {"id": sid}
     async with immich_for(user) as immich:
-        return {"id": sid, **await suggestions.apply(db, immich, user.id, [sid])}
+        return {"id": sid, **await suggestions.apply(db, immich, user.id, [sid], reason=reason, note=body.note)}
+
+
+# --- decision log -----------------------------------------------------------
+@router.get("/decisions/stats")
+def decision_stats(user: User = Depends(current_user), db: Database = Depends(get_db)) -> dict:
+    return decisions.stats(db, user.id)
+
+
+@router.get("/decisions/export")
+def decision_export(user: User = Depends(current_user), db: Database = Depends(get_db)) -> StreamingResponse:
+    return StreamingResponse(
+        decisions.export(db, user.id), media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="immichchrono-entscheidungen.jsonl"'})
 
 
 # --- camera clock tool ------------------------------------------------------
@@ -387,7 +418,7 @@ def cameras(user: User = Depends(current_user), db: Database = Depends(get_db)) 
     )
 
 
-class ShiftBody(BaseModel):
+class ShiftBody(ReasonBody):
     make: str | None = None
     model: str | None = None
     start: datetime | None = None
@@ -423,13 +454,14 @@ def shift_preview(body: ShiftBody, user: User = Depends(current_user), db: Datab
 @router.post("/camera-shift/apply")
 async def shift_apply(body: ShiftBody, user: User = Depends(current_user), db: Database = Depends(get_db)) -> dict:
     offset, assets = _shift_plan(body, user, db)
+    reason = _reason(body.reason)
     if not assets:
         return {"applied": 0, "failed": []}
     note = f"Kamera-Uhr korrigiert ({body.make or ''} {body.model or ''}, Versatz {offset})"
     ids = [suggestions.create_manual(db, user.id, a, current_local(a) + offset, note, source="camera_shift")
            for a in assets]
     async with immich_for(user) as immich:
-        return await suggestions.apply(db, immich, user.id, ids)
+        return await suggestions.apply(db, immich, user.id, ids, reason=reason, note=body.note)
 
 
 # --- Claude -----------------------------------------------------------------

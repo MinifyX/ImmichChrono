@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type AssetDetail } from '$lib/api';
+  import { api, type AssetDetail, type DecisionAction, type Reason } from '$lib/api';
   import {
     confidenceColor,
     formatDate,
@@ -11,9 +11,10 @@
   } from '$lib/format';
   import { app } from '$lib/state.svelte';
   import { Alert, Badge, Button, Field, Input, LoadingSpinner, Modal, ModalBody, Text, toastManager } from '@immich/ui';
-  import { mdiCalendarEdit, mdiCheck, mdiCreation, mdiOpenInNew, mdiUndo } from '@mdi/js';
+  import { mdiCalendarEdit, mdiCheck, mdiClose, mdiCreation, mdiOpenInNew, mdiUndo } from '@mdi/js';
   import AssetThumb from './AssetThumb.svelte';
   import ClaudeModal from './ClaudeModal.svelte';
+  import ReasonModal from './ReasonModal.svelte';
 
   type Props = { id: string; onClose: () => void; onChange?: () => void };
   const { id, onClose, onChange }: Props = $props();
@@ -23,6 +24,7 @@
   let manual = $state('');
   let busy = $state(false);
   let claudeOpen = $state(false);
+  let ask = $state<{ action: DecisionAction; sid?: number } | null>(null);
 
   async function load() {
     try {
@@ -48,10 +50,27 @@
     }
   }
 
-  const applyOne = (sid: number) => act(() => api('/suggestions/apply', { body: { ids: [sid] } }), 'Datum übernommen');
-  const undo = (sid: number) => act(() => api(`/suggestions/${sid}/undo`, { method: 'POST' }), 'Änderung zurückgenommen');
-  const setManual = () =>
-    act(() => api(`/assets/${id}/manual`, { body: { date: manual.length === 16 ? `${manual}:00` : manual } }), 'Datum gesetzt');
+  const ASK = {
+    applied: { title: 'Vorschlag übernehmen', confirm: 'Übernehmen' },
+    rejected: { title: 'Vorschlag ablehnen', confirm: 'Ablehnen' },
+    reverted: { title: 'Änderung zurücknehmen', confirm: 'Rückgängig' },
+    manual: { title: 'Datum manuell setzen', confirm: 'Setzen' },
+  } as const;
+
+  function decide(why: Reason | null) {
+    const a = ask;
+    ask = null;
+    if (!a || !why) return;
+    const sid = a.sid!;
+    if (a.action === 'applied') act(() => api('/suggestions/apply', { body: { ids: [sid], ...why } }), 'Datum übernommen');
+    else if (a.action === 'rejected') act(() => api('/suggestions/reject', { body: { ids: [sid], ...why } }), 'Vorschlag abgelehnt');
+    else if (a.action === 'reverted') act(() => api(`/suggestions/${sid}/undo`, { body: why }), 'Änderung zurückgenommen');
+    else
+      act(
+        () => api(`/assets/${id}/manual`, { body: { date: manual.length === 16 ? `${manual}:00` : manual, ...why } }),
+        'Datum gesetzt',
+      );
+  }
 </script>
 
 <Modal title={asset?.fileName ?? 'Datei'} {onClose} size="giant">
@@ -96,9 +115,14 @@
                     <Badge size="tiny" color="info">{STATUS_LABELS[s.status] ?? s.status}</Badge>
                     <span class="grow"></span>
                     {#if s.status === 'pending'}
-                      <Button size="tiny" leadingIcon={mdiCheck} disabled={busy} onclick={() => applyOne(s.id)}>Übernehmen</Button>
+                      <Button size="tiny" variant="outline" color="danger" leadingIcon={mdiClose} disabled={busy}
+                        onclick={() => (ask = { action: 'rejected', sid: s.id })}>Ablehnen</Button>
+                      <Button size="tiny" leadingIcon={mdiCheck} disabled={busy} onclick={() => (ask = { action: 'applied', sid: s.id })}>
+                        Übernehmen
+                      </Button>
                     {:else if s.status === 'applied' || s.status === 'auto_applied'}
-                      <Button size="tiny" variant="outline" color="secondary" leadingIcon={mdiUndo} disabled={busy} onclick={() => undo(s.id)}>
+                      <Button size="tiny" variant="outline" color="secondary" leadingIcon={mdiUndo} disabled={busy}
+                        onclick={() => (ask = { action: 'reverted', sid: s.id })}>
                         Rückgängig
                       </Button>
                     {/if}
@@ -114,7 +138,7 @@
               <Input type="datetime-local" step="1" bind:value={manual} />
             </Field>
             <div class="mt-3 flex flex-wrap gap-2">
-              <Button size="small" leadingIcon={mdiCalendarEdit} disabled={busy || !manual} onclick={setManual}>Setzen</Button>
+              <Button size="small" leadingIcon={mdiCalendarEdit} disabled={busy || !manual} onclick={() => (ask = { action: 'manual' })}>Setzen</Button>
               <Button size="small" variant="outline" leadingIcon={mdiCreation} onclick={() => (claudeOpen = true)}>
                 Claude fragen
               </Button>
@@ -131,4 +155,9 @@
 
 {#if claudeOpen}
   <ClaudeModal assetIds={[id]} onClose={() => (claudeOpen = false)} />
+{/if}
+
+{#if ask}
+  <ReasonModal action={ask.action} title={ASK[ask.action].title} confirmText={ASK[ask.action].confirm}
+    danger={ask.action === 'rejected'} onClose={decide} />
 {/if}

@@ -54,6 +54,20 @@ export type ServerInfo = {
   claude: { configured: boolean; models: string[]; defaultModel: string; prices: Record<string, [number, number]> };
   ollama: { configured: boolean; reachable?: boolean; installed?: boolean; model?: string; error?: string };
   issueLabels: Record<string, string>;
+  decisionReasons: { code: string; label: string; actions: DecisionAction[] }[];
+};
+
+export type DecisionAction = 'applied' | 'rejected' | 'reverted' | 'manual';
+export type Reason = { reason: string | null; note: string | null };
+
+export type DecisionRow = { key: string; accepted: number; rejected: number; auto: number; manual: number; rate: number | null };
+export type DecisionStats = {
+  total: number;
+  bySource: DecisionRow[];
+  byCamera: DecisionRow[];
+  byIssue: DecisionRow[];
+  byPattern: DecisionRow[];
+  reasons: { action: string; reason: string; label: string; count: number }[];
 };
 
 export type Job = {

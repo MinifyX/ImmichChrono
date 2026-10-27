@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from . import __version__
+from . import __version__, decisions
 from .api import router
 from .config import settings
 from .db import Database, now_iso
@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
     db.execute("UPDATE jobs SET status='failed', message='Neustart während des Laufs', finished_at=? "
                "WHERE status='running'", (now_iso(),))
     db.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso(),))
+    if n := decisions.backfill(db):
+        logging.getLogger(__name__).info("Entscheidungsprotokoll: %d frühere Entscheidungen übernommen", n)
     app.state.db = db
     yield
 

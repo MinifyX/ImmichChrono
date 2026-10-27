@@ -89,6 +89,21 @@ CREATE TABLE IF NOT EXISTS claude_usage (
   cost_usd REAL NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS claude_usage_asset ON claude_usage(user_id, asset_id, id);
+-- Append-only log of every review decision with a snapshot of what the suggestion looked like.
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  suggestion_id INTEGER,
+  asset_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT,
+  note TEXT,
+  features TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS decisions_user ON decisions(user_id, ts);
+CREATE INDEX IF NOT EXISTS decisions_suggestion ON decisions(suggestion_id);
 """
 
 

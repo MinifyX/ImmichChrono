@@ -143,3 +143,69 @@ def test_cross_origin_writes_are_rejected(fake, tmp_path):
         assert client.get("/api/assets/..%3Fx/thumbnail").status_code in (404, 422)
         r = client.post("/api/auth/logout", headers={"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"})
         assert r.status_code == 200 and r.headers["x-frame-options"] == "DENY"
+
+
+def test_decision_log(fake, tmp_path, capsys):
+    with TestClient(create_app(tmp_path)) as client:
+        client.post("/api/auth/login", json={"email": "user@example.com", "password": "pw"})
+        assert wait(client, client.post("/api/scans", json={"full": True}).json()["id"])["status"] == "done"
+        server = client.get("/api/server").json()
+        assert any(r["code"] == "not_capture" for r in server["decisionReasons"])
+
+        sid = next(s["id"] for s in client.get("/api/suggestions").json()["items"] if s["asset_id"] == "a1")
+        assert client.post("/api/suggestions/reject", json={"ids": [sid], "reason": "nope"}).status_code == 422
+        assert client.post("/api/suggestions/reject", json={"ids": [sid], "note": "x" * 501}).status_code == 422
+        r = client.post("/api/suggestions/reject", json={"ids": [sid, 999], "reason": "wrong_day", "note": "eher Juli"})
+        assert r.json()["rejected"] == 1
+
+        r = client.post("/api/assets/a1/manual", json={"date": "2019-07-01T12:00:00", "reason": "wrong_day"})
+        assert r.json()["applied"] == 1
+        hist = client.get("/api/suggestions", params={"status": "history"}).json()["items"]
+        manual_id = next(s["id"] for s in hist if s["asset_id"] == "a1")
+        assert client.post(f"/api/suggestions/{manual_id}/undo", json={"reason": "old_correct"}).json()["ok"]
+
+        # The test database is shared between tests: only look at what this test added.
+        lines = [json.loads(x) for x in client.get("/api/decisions/export").text.splitlines()]
+        assert ("auto_applied", "auto") in [(d["action"], d["reason"]) for d in lines]
+        lines = lines[-3:]
+        assert [(d["action"], d["reason"]) for d in lines] == [
+            ("rejected", "wrong_day"), ("manual", "wrong_day"), ("reverted", "old_correct")]
+        rejected = lines[0]
+        assert rejected["note"] == "eher Juli" and rejected["reason_label"] == "Richtiges Jahr, falscher Tag"
+        f = rejected["features"]
+        assert f["name_pattern"] == "IMG-########-WA####.jpg" and f["source"] == "filename"
+        assert f["previous_date"].startswith("2024-03-01") and f["delta_days"] < -1800
+        # The undo keeps the features from before the change, not the "fixed" asset state.
+        assert lines[2]["features"]["category"] == lines[1]["features"]["category"] != "fixed"
+
+        stats = client.get("/api/decisions/stats").json()
+        src = {row["key"]: row for row in stats["bySource"]}
+        assert src["filename"]["rejected"] >= 1 and src["filename"]["auto"] >= 1
+        assert src["manual"]["rejected"] >= 1  # a reverted manual change counts against it
+        pairs = {(r["action"], r["reason"]) for r in stats["reasons"]}
+        assert pairs >= {("rejected", "wrong_day"), ("reverted", "old_correct")}  # latest per suggestion
+
+    # CLI export reads the same database; backfill is idempotent.
+    from immichchrono import decisions as dec
+    from immichchrono import export
+    from immichchrono.config import settings
+    from immichchrono.db import Database
+
+    assert dec.backfill(Database(settings.db_path)) == 0
+    assert export.main(["--user", USER]) == 0
+    assert len(capsys.readouterr().out.splitlines()) >= 4
+
+
+def test_decision_backfill():
+    from immichchrono import decisions as dec
+    from immichchrono.db import Database
+
+    db = Database(":memory:")
+    for status, source in [("rejected", "album"), ("applied", "manual"), ("pending", "album")]:
+        db.execute("INSERT INTO suggestions(user_id, asset_id, source, proposed, precision, confidence, explanation, "
+                   "status, previous_date, created_at) VALUES ('u','x',?, '2020-01-01T12:00:00', 'day', 0.5, '', ?, "
+                   "'2021-01-01T12:00:00', '2024-01-01T00:00:00+00:00')", (source, status))
+    assert dec.backfill(db) == 2 and dec.backfill(db) == 0
+    rows = db.all("SELECT action, reason FROM decisions ORDER BY id")
+    assert rows == [{"action": "rejected", "reason": "unbekannt"}, {"action": "manual", "reason": "unbekannt"}]
+    assert json.loads(db.scalar("SELECT features FROM decisions LIMIT 1"))["delta_days"] == -366.0

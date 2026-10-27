@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import datetime
 
+from . import decisions
 from .config import settings
 from .dates import asset_zone, current_iso, to_write_iso
 from .db import Database, now_iso
@@ -44,7 +45,8 @@ def store(db: Database, user_id: str, asset: dict, cand: Candidate) -> int | Non
     return cur.lastrowid
 
 
-async def apply(db: Database, immich: Immich, user_id: str, ids: list[int], *, auto: bool = False) -> dict:
+async def apply(db: Database, immich: Immich, user_id: str, ids: list[int], *, auto: bool = False,
+                reason: str | None = None, note: str | None = None) -> dict:
     rows = db.all(
         f"SELECT * FROM suggestions WHERE user_id=? AND status='pending' AND id IN ({','.join('?' * len(ids))})",
         (user_id, *ids),
@@ -54,6 +56,7 @@ async def apply(db: Database, immich: Immich, user_id: str, ids: list[int], *, a
 
     async def one(row: dict) -> None:
         nonlocal ok
+        features = decisions.snapshot(db, user_id, row)  # before the asset is marked as fixed
         async with sem:
             try:
                 updated = await immich.update_date(row["asset_id"], row["proposed"])
@@ -70,18 +73,40 @@ async def apply(db: Database, immich: Immich, user_id: str, ids: list[int], *, a
             (user_id, row["asset_id"]),
         )
         _refresh_asset(db, user_id, row["asset_id"], updated, row["proposed"])
+        action = "auto_applied" if auto else row["source"] if row["source"] in ("manual", "camera_shift") else "applied"
+        decisions.log(db, user_id, row, action, "auto" if auto else reason, note, features)
         ok += 1
 
     await asyncio.gather(*(one(r) for r in rows))
     return {"applied": ok, "failed": failed}
 
 
-async def undo(db: Database, immich: Immich, user_id: str, suggestion_id: int) -> None:
+def reject(db: Database, user_id: str, ids: list[int], reason: str | None = None, note: str | None = None) -> int:
+    rows = db.all(
+        f"SELECT * FROM suggestions WHERE user_id=? AND status='pending' AND id IN ({','.join('?' * len(ids))})",
+        (user_id, *ids),
+    ) if ids else []
+    done = 0
+    with db.tx():
+        for row in rows:
+            # Status check again inside the transaction: a parallel apply may have won meanwhile.
+            if db.execute("UPDATE suggestions SET status='rejected' WHERE id=? AND status='pending'",
+                          (row["id"],)).rowcount:
+                decisions.log(db, user_id, row, "rejected", reason, note)
+                done += 1
+    return done
+
+
+async def undo(db: Database, immich: Immich, user_id: str, suggestion_id: int, reason: str | None = None,
+               note: str | None = None) -> None:
     row = db.one("SELECT * FROM suggestions WHERE user_id=? AND id=?", (user_id, suggestion_id))
     if not row or row["status"] not in ("applied", "auto_applied") or not row["previous_date"]:
         raise ValueError("Diese Änderung kann nicht rückgängig gemacht werden")
     updated = await immich.update_date(row["asset_id"], row["previous_date"])
     db.execute("UPDATE suggestions SET status='reverted' WHERE id=?", (suggestion_id,))
+    # Same features as when it was applied – the asset row now looks "fixed".
+    prev = db.scalar("SELECT features FROM decisions WHERE suggestion_id=? ORDER BY id DESC LIMIT 1", (suggestion_id,))
+    decisions.log(db, user_id, row, "reverted", reason, note, json.loads(prev) if prev else None)
     _refresh_asset(db, user_id, row["asset_id"], updated, row["previous_date"])
 
 

@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { api, qs, type Page, type Suggestion } from '$lib/api';
+  import { api, qs, type Page, type Reason, type Suggestion } from '$lib/api';
   import AssetModal from '$lib/components/AssetModal.svelte';
   import PageHeader from '$lib/components/PageHeader.svelte';
+  import ReasonModal from '$lib/components/ReasonModal.svelte';
   import SuggestionCard from '$lib/components/SuggestionCard.svelte';
   import { formatTimestamp } from '$lib/format';
   import { app } from '$lib/state.svelte';
@@ -13,6 +14,7 @@
   let pageNo = $state(1);
   let detail = $state<string | null>(null);
   let busy = $state<number | null>(null);
+  let ask = $state<number | null>(null);
 
   async function load() {
     data = await api<Page<Suggestion>>(`/suggestions${qs({ status: 'history', q, page: pageNo })}`);
@@ -23,10 +25,12 @@
     load();
   });
 
-  async function undo(id: number) {
+  async function undo(id: number, why: Reason | null) {
+    ask = null;
+    if (!why) return;
     busy = id;
     try {
-      await api(`/suggestions/${id}/undo`, { method: 'POST' });
+      await api(`/suggestions/${id}/undo`, { body: why });
       toastManager.success('Änderung zurückgenommen');
       await load();
     } catch (e) {
@@ -54,7 +58,7 @@
         <div class="flex items-center justify-between px-2">
           <Text size="tiny" color="muted">{s.applied_at ? formatTimestamp(s.applied_at) : ''}</Text>
           {#if s.status !== 'reverted'}
-            <Button size="tiny" variant="ghost" color="secondary" leadingIcon={mdiUndo} loading={busy === s.id} onclick={() => undo(s.id)}>
+            <Button size="tiny" variant="ghost" color="secondary" leadingIcon={mdiUndo} loading={busy === s.id} onclick={() => (ask = s.id)}>
               Rückgängig
             </Button>
           {/if}
@@ -73,4 +77,8 @@
 
 {#if detail}
   <AssetModal id={detail} onClose={() => (detail = null)} onChange={load} />
+{/if}
+
+{#if ask !== null}
+  <ReasonModal action="reverted" title="Änderung zurücknehmen" confirmText="Rückgängig" onClose={(why) => undo(ask!, why)} />
 {/if}

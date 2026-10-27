@@ -21,6 +21,12 @@ Zusätzlich gibt es einen **Analysebericht** (Übersicht) mit Kategorien, Proble
 4. **Claude (optional)** – nur auf Knopfdruck für ausgewählte Bilder, mit Kostenschätzung vorab und Budgetgrenze pro Lauf.
 5. **Prüfen** – Vorschläge filtern, übernehmen, ablehnen oder manuell setzen. Jede Änderung steht im **Verlauf** und lässt sich rückgängig machen.
 
+Zu jeder Entscheidung kannst du einen **Grund** angeben. Das Protokoll steht unter **Auswertung** (Übernahmequote je Quelle, Kamera, Problemart, Dateinamen-Muster) und lässt sich als JSON Lines exportieren:
+
+```bash
+docker exec immichchrono python -m immichchrono.export > entscheidungen.jsonl   # optional: --user <Immich-User-ID>
+```
+
 **Automatisch übernommen** werden nur sehr sichere Fälle (GPS-Zeit, eindeutiger Dateiname, exaktes Duplikat) – abschaltbar in den Einstellungen.
 
 ## Installation
