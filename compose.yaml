@@ -1,0 +1,33 @@
+# ImmichChrono neben einem bestehenden Immich-Stack.
+# Am einfachsten in die docker-compose.yml von Immich übernehmen oder mit
+#   docker compose -f docker-compose.yml -f /pfad/zu/ImmichChrono/compose.yaml up -d
+# starten, damit ImmichChrono im selben Netzwerk wie immich-server läuft.
+name: immich
+
+services:
+  immichchrono:
+    container_name: immichchrono
+    image: ghcr.io/minifyx/immichchrono:latest
+    build: .
+    restart: unless-stopped
+    ports:
+      - "2284:8000"
+    environment:
+      IMMICH_URL: http://immich-server:2283
+      # Adresse, unter der du Immich im Browser öffnest (für „In Immich öffnen“-Links).
+      IMMICH_PUBLIC_URL: ${IMMICH_PUBLIC_URL:-}
+      TZ: ${TZ:-Europe/Berlin}
+      # Optional: Claude-Analyse auf Knopfdruck.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional: lokale KI, z. B. http://ollama:11434
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llava:7b}
+      # Auf true setzen, wenn ImmichChrono hinter HTTPS läuft.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # IP/Subnetz des Reverse-Proxys, dessen X-Forwarded-*-Header vertraut wird.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    volumes:
+      - immichchrono-data:/data
+
+volumes:
+  immichchrono-data:

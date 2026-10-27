@@ -1,0 +1,11 @@
+**
+!backend/pyproject.toml
+!backend/immichchrono/**
+!web/package.json
+!web/pnpm-lock.yaml
+!web/svelte.config.js
+!web/vite.config.ts
+!web/tsconfig.json
+!web/src/**
+!web/static/**
+**/__pycache__

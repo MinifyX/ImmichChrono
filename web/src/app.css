@@ -1,0 +1,9 @@
+@import '@immich/ui/theme/default.css';
+@source '../node_modules/@immich/ui';
+
+@layer base {
+  html,
+  body {
+    font-family: 'Overpass', 'GoogleSans', ui-sans-serif, system-ui, sans-serif;
+  }
+}

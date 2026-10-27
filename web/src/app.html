@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ImmichChrono</title>
+    <script>
+      // Avoid a light flash before the theme manager runs (same key as Immich's web app).
+      try {
+        const p = JSON.parse(localStorage.getItem('immich-ui-theme') ?? 'null');
+        const dark = p === 'dark' || ((!p || p === 'system') && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.add(dark ? 'dark' : 'light');
+      } catch {}
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover" class="bg-light text-dark">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

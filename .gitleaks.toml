@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake-Werte aus Tests und Doku"
+regexes = ['''sk-ant-test-[A-Za-z0-9-]*''', '''"accessToken": "tok"''']
+paths = ['''backend/tests/.*''']
