@@ -88,3 +88,7 @@ pnpm lint && pnpm typecheck && pnpm test && pnpm build
 ```
 
 Ein Release entsteht durch einen Tag `vX.Y.Z`: Die Pipeline baut das Image nativ für amd64 und arm64, veröffentlicht es auf `ghcr.io/minifyx/immichchrono` und legt ein GitHub-Release mit dem CHANGELOG-Eintrag an.
+
+## Lizenz
+
+[AGPL-3.0](LICENSE) – wie Immich selbst.
